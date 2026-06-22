@@ -1,103 +1,130 @@
 package main
 
 import (
+	"bufio"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/json"
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"net"
+	"os"
 	"time"
 )
 
-// Constantes oficiales de Guard Pro 7
 const TotalSupply = 100000000
 const Ticker = "GuardPro"
+const WalletFile = "guardpro.priv"
+const PuertoRed = ":8080" // Puerto donde escuchará tu nodo semilla
 
-// Block representa un bloque con Doble SHA-256 y datos firmados
 type Block struct {
-	Index        int
-	Timestamp    string
-	Data         string
-	PrevHash     string
-	Hash         string
-	FirmaR       *big.Int // Componente R de la firma ECDSA
-	FirmaS       *big.Int // Componente S de la firma ECDSA
+	Index     int
+	Timestamp string
+	Data      string
+	PrevHash  string
+	Hash      string
+	FirmaR    *big.Int
+	FirmaS    *big.Int
 }
 
-// CalcularDobleHash aplica SHA-256 dos veces para máxima seguridad de enlace
+// Global para almacenar la cadena en memoria del nodo
+var Blockchain []Block
+
 func CalcularDobleHash(b Block) string {
 	record := string(rune(b.Index)) + b.Timestamp + b.Data + b.PrevHash
-	
-	 primerHash := sha256.Sum256([]byte(record))
+	primerHash := sha256.Sum256([]byte(record))
 	dobleHash := sha256.Sum256(primerHash[:])
-	
 	return hex.EncodeToString(dobleHash[:])
 }
 
-// CrearBloqueFase2 genera un bloque y lo firma criptográficamente con la clave privada
-func CrearBloqueFase2(oldBlock Block, data string, privKey *ecdsa.PrivateKey) (Block, error) {
-	var newBlock Block
-	newBlock.Index = oldBlock.Index + 1
-	newBlock.Timestamp = time.Now().String()
-	newBlock.Data = data
-	newBlock.PrevHash = oldBlock.Hash
-	newBlock.Hash = CalcularDobleHash(newBlock)
-
-	// Firmar digitalmente el Hash del bloque para demostrar la identidad del nodo
-	hashBytes, _ := hex.DecodeString(newBlock.Hash)
-	r, s, err := ecdsa.Sign(rand.Reader, privKey, hashBytes)
-	if err != nil {
-		return Block{}, err
+func CargarOGenerarBilletera() (*ecdsa.PrivateKey, string, error) {
+	if _, err := os.Stat(WalletFile); err == nil {
+		bytesPrivados, err := os.ReadFile(WalletFile)
+		if err != nil {
+			return nil, "", err
+		}
+		privKey, err := x509.ParseECPrivateKey(bytesPrivados)
+		if err != nil {
+			return nil, "", err
+		}
+		pubKeyHash := sha256.Sum256(elliptic.Marshal(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y))
+		direccionBilletera := "GP" + hex.EncodeToString(pubKeyHash[:16])
+		fmt.Println("🔑 [Billetera Cargada Exitosamente]")
+		return privKey, direccionBilletera, nil
 	}
-	newBlock.FirmaR = r
-	newBlock.FirmaS = s
 
-	return newBlock, nil
+	fmt.Println("✨ [Generando Nueva Billetera]...")
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, "", err
+	}
+	bytesPrivados, err := x509.MarshalECPrivateKey(privKey)
+	if err != nil {
+		return nil, "", err
+	}
+	err = os.WriteFile(WalletFile, bytesPrivados, 0600)
+	if err != nil {
+		return nil, "", err
+	}
+	pubKeyHash := sha256.Sum256(elliptic.Marshal(elliptic.P256(), privateKey.PublicKey.X, privateKey.PublicKey.Y))
+	direccionBilletera := "GP" + hex.EncodeToString(pubKeyHash[:16])
+	return privKey, direccionBilletera, nil
+}
+
+// ManejarConexion atiende a otros nodos que se conectan a nuestra laptop
+func ManejarConexion(conn net.Conn) {
+	defer conn.Close()
+	fmt.Printf("🌐 [Nueva Conexión]: Un par (peer) se ha conectado desde %s\n", conn.RemoteAddr().String())
+
+	// Convertir nuestra Blockchain a formato JSON para enviarla por la red
+	encoder := json.NewEncoder(conn)
+	err := encoder.Encode(Blockchain)
+	if err != nil {
+		fmt.Println("Error al enviar la blockchain al par:", err)
+		return
+	}
+	fmt.Println("📦 [Sincronización]: Historial de bloques enviado con éxito al nuevo par.")
 }
 
 func main() {
-	fmt.Printf("--- [Fase 2] Iniciando Blockchain Segura de Guard Pro 7 (%s) ---\n", Ticker)
-	fmt.Printf("Suministro Total Protegido: %d monedas\n\n", TotalSupply)
+	fmt.Printf("--- [Fase 3] Nodo Semilla P2P de Guard Pro 7 (%s) ---\n", Ticker)
 
-	// 1. Generar la Billetera del Nodo (Clave Privada y Pública) usando Curva Elíptica
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// 1. Cargar Identidad
+	_, direccionBilletera, err := CargarOGenerarBilletera()
 	if err != nil {
-		fmt.Println("Error al generar las claves criptográficas:", err)
+		fmt.Println("Error en billetera:", err)
 		return
 	}
-	pubKeyHash := sha256.Sum256(elliptic.Marshal(elliptic.P256(), privateKey.PublicKey.X, privateKey.PublicKey.Y))
-	direccionBilletera := "GP" + hex.EncodeToString(pubKeyHash[:16]) // Dirección simulada de GuardPro
+	fmt.Printf("Dirección del Nodo Semilla: %s\n\n", direccionBilletera)
 
-	fmt.Printf("[Billetera del Nodo Creada]\nDirección Pública: %s\n\n", direccionBilletera)
-
-	// 2. Creación del Bloque Génesis (Bloque 0)
-	genesisBlock := Block{0, time.Now().String(), "Bloque Genesis Protegido de GuardPro", "", "", nil, nil}
+	// 2. Inicializar la Blockchain con el Bloque Génesis si está vacía
+	genesisBlock := Block{0, time.Now().String(), "Bloque Genesis P2P de GuardPro", "", "", nil, nil}
 	genesisBlock.Hash = CalcularDobleHash(genesisBlock)
-	fmt.Println("[Bloque 0 - Génesis creado con Doble SHA-256]")
-	fmt.Printf("Hash Base: %s\n\n", genesisBlock.Hash)
+	Blockchain = append(Blockchain, genesisBlock)
+	fmt.Println("[Bloque 0 - Génesis cargado en memoria local]")
 
-	// 3. Crear Bloque 1 firmado (Simulación de Recompensa por estar activo)
-	dataRecompensa := fmt.Sprintf("Recompensa por Uptime asignada a la dirección %s", direccionBilletera)
-	bloque1, err := CrearBloqueFase2(genesisBlock, dataRecompensa, privateKey)
+	// 3. Levantar el Servidor P2P de la Blockchain
+	escuchador, err := net.Listen("tcp", PuertoRed)
 	if err != nil {
-		fmt.Println("Error al firmar el bloque:", err)
+		fmt.Printf("Error al abrir el puerto %s: %v\n", PuertoRed, err)
 		return
 	}
+	defer escuchador.Close()
+	fmt.Printf("🚀 [Nodo Semilla Activo]: Escuchando conexiones P2P en el puerto %s...\n", PuertoRed)
+	fmt.Println("💡 (El nodo se quedará corriendo de forma permanente. Presiona Ctrl+C si deseas apagarlo)\n")
 
-	fmt.Printf("[Bloque %d Creado y Firmado Exitosamente]\n", bloque1.Index)
-	fmt.Printf("Data: %s\n", bloque1.Data)
-	fmt.Printf("Doble Hash: %s\n", bloque1.Hash)
-	fmt.Printf("Firma Digital (R): %s...\n\n", bloque1.FirmaR.Text(16)[:20])
-
-	// 4. Verificación híbrida: El nodo valida que la firma sea real usando la clave pública
-	hashBytes, _ := hex.DecodeString(bloque1.Hash)
-	esValido := ecdsa.Verify(&privateKey.PublicKey, hashBytes, bloque1.FirmaR, bloque1.FirmaS)
-	
-	if esValido {
-		fmt.Println("✅ [Verificación Exitosa]: La firma es auténtica. El bloque ha sido enlazado a la red.")
-	} else {
-		fmt.Println("❌ [ALERTA DE SEGURIDAD]: Firma inválida. Intento de alteración detectado.")
+	// Bucle infinito para aceptar conexiones de otros nodos sin detenerse
+	for {
+		conexion, err := escuchador.Accept()
+		if err != nil {
+			fmt.Println("Error al aceptar conexión:", err)
+			continue
+		}
+		// Ejecutar cada conexión en un hilo ligero (Goroutine) para no congelar el nodo
+		go ManejarConexion(conexion)
 	}
 }
