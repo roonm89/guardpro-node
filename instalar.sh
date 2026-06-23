@@ -34,7 +34,7 @@ cd $HOME/guardpro-clean
 # 4. Clonar el repositorio limpio (Asegúrate de cambiar este enlace por tu repositorio real más adelante)
 echo "📦 Descargando el código fuente oficial de GuardPro..."
 # Nota: Durante tu desarrollo manual, puedes omitir este paso clonando directamente tu carpeta local.
-# git clone https://github.com .
+ git clone https://github.com .
 
 # 5. Leer los parámetros que el usuario envió al comando
 TIPO_NODO="validador" # Por defecto se asigna como validador
