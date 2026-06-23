@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"math/big"
 	"net"
@@ -19,7 +19,6 @@ import (
 const TotalSupply = 100000000
 const Ticker = "GuardPro"
 const WalletFile = "guardpro.priv"
-const PuertoRed = ":8080" // Puerto donde escuchará tu nodo semilla
 
 type Block struct {
 	Index     int
@@ -31,7 +30,6 @@ type Block struct {
 	FirmaS    *big.Int
 }
 
-// Global para almacenar la cadena en memoria del nodo
 var Blockchain []Block
 
 func CalcularDobleHash(b Block) string {
@@ -53,11 +51,9 @@ func CargarOGenerarBilletera() (*ecdsa.PrivateKey, string, error) {
 		}
 		pubKeyHash := sha256.Sum256(elliptic.Marshal(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y))
 		direccionBilletera := "GP" + hex.EncodeToString(pubKeyHash[:16])
-		fmt.Println("🔑 [Billetera Cargada Exitosamente]")
 		return privKey, direccionBilletera, nil
 	}
 
-	fmt.Println("✨ [Generando Nueva Billetera]...")
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, "", err
@@ -70,61 +66,77 @@ func CargarOGenerarBilletera() (*ecdsa.PrivateKey, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	pubKeyHash := sha256.Sum256(elliptic.Marshal(elliptic.P256(), privateKey.PublicKey.X, privateKey.PublicKey.Y))
+	pubKeyHash := sha256.Sum256(elliptic.Marshal(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y))
 	direccionBilletera := "GP" + hex.EncodeToString(pubKeyHash[:16])
 	return privKey, direccionBilletera, nil
 }
 
-// ManejarConexion atiende a otros nodos que se conectan a nuestra laptop
 func ManejarConexion(conn net.Conn) {
 	defer conn.Close()
-	fmt.Printf("🌐 [Nueva Conexión]: Un par (peer) se ha conectado desde %s\n", conn.RemoteAddr().String())
+	json.NewEncoder(conn).Encode(Blockchain)
+}
 
-	// Convertir nuestra Blockchain a formato JSON para enviarla por la red
-	encoder := json.NewEncoder(conn)
-	err := encoder.Encode(Blockchain)
+func ConectarASemilla(target string) {
+	conn, err := net.Dial("tcp", target)
 	if err != nil {
-		fmt.Println("Error al enviar la blockchain al par:", err)
+		fmt.Printf("❌ Error al conectar al Nodo Semilla en %s: %v\n", target, err)
 		return
 	}
-	fmt.Println("📦 [Sincronización]: Historial de bloques enviado con éxito al nuevo par.")
+	defer conn.Close()
+	fmt.Println("🔗 [Conexión P2P]: Conectado exitosamente al Nodo Semilla.")
+
+	var cadenaRecibida []Block
+	err = json.NewDecoder(conn).Decode(&cadenaRecibida)
+	if err != nil {
+		fmt.Println("Error al decodificar la blockchain:", err)
+		return
+	}
+	fmt.Printf("📦 [Sincronización]: Blockchain descargada. Bloques actuales: %d\n", len(cadenaRecibida))
 }
 
 func main() {
-	fmt.Printf("--- [Fase 3] Nodo Semilla P2P de Guard Pro 7 (%s) ---\n", Ticker)
+	// Definición de banderas/parámetros de consola
+	tipoNodo := flag.String("tipo", "semilla", "Tipo de nodo a ejecutar (semilla, validador, billetera)")
+	puerto := flag.String("puerto", "8080", "Puerto para escuchar conexiones locales")
+	semillaIP := flag.String("semilla", "190.87.251.234:8080", "Dirección IP del nodo semilla")
+	flag.Parse()
 
-	// 1. Cargar Identidad
-	_, direccionBilletera, err := CargarOGenerarBilletera()
-	if err != nil {
-		fmt.Println("Error en billetera:", err)
-		return
-	}
-	fmt.Printf("Dirección del Nodo Semilla: %s\n\n", direccionBilletera)
+	fmt.Printf("--- Nodo Guard Pro 7 (%s) | Rol: %s ---\n", Ticker, *tipoNodo)
 
-	// 2. Inicializar la Blockchain con el Bloque Génesis si está vacía
-	genesisBlock := Block{0, time.Now().String(), "Bloque Genesis P2P de GuardPro", "", "", nil, nil}
-	genesisBlock.Hash = CalcularDobleHash(genesisBlock)
-	Blockchain = append(Blockchain, genesisBlock)
-	fmt.Println("[Bloque 0 - Génesis cargado en memoria local]")
+	_, direccionBilletera, _ := CargarOGenerarBilletera()
+	fmt.Printf("Dirección de Billetera: %s\n\n", direccionBilletera)
 
-	// 3. Levantar el Servidor P2P de la Blockchain
-	escuchador, err := net.Listen("tcp", PuertoRed)
-	if err != nil {
-		fmt.Printf("Error al abrir el puerto %s: %v\n", PuertoRed, err)
-		return
-	}
-	defer escuchador.Close()
-	fmt.Printf("🚀 [Nodo Semilla Activo]: Escuchando conexiones P2P en el puerto %s...\n", PuertoRed)
-	fmt.Println("💡 (El nodo se quedará corriendo de forma permanente. Presiona Ctrl+C si deseas apagarlo)\n")
+	// Lógica según el tipo de nodo asignado automáticamente
+	if *tipoNodo == "semilla" {
+		genesisBlock := Block{0, time.Now().String(), "Bloque Genesis P2P de GuardPro", "", "", nil, nil}
+		genesisBlock.Hash = CalcularDobleHash(genesisBlock)
+		Blockchain = append(Blockchain, genesisBlock)
 
-	// Bucle infinito para aceptar conexiones de otros nodos sin detenerse
-	for {
-		conexion, err := escuchador.Accept()
+		escuchador, err := net.Listen("tcp", ":"+*puerto)
 		if err != nil {
-			fmt.Println("Error al aceptar conexión:", err)
-			continue
+			fmt.Println("Error abriendo puerto:", err)
+			return
 		}
-		// Ejecutar cada conexión en un hilo ligero (Goroutine) para no congelar el nodo
-		go ManejarConexion(conexion)
+		defer escuchador.Close()
+		fmt.Printf("🚀 [Nodo Semilla Activo]: Escuchando en el puerto %s...\n", *puerto)
+		for {
+			conexion, err := escuchador.Accept()
+			if err != nil {
+				continue
+			}
+			go ManejarConexion(conexion)
+		}
+	} else {
+		// Nodos Validadores o Billeteras se conectan automáticamente al arrancar
+		fmt.Printf("🛰️ Iniciando cliente... Conectando al semilla en %s\n", *semillaIP)
+		ConectarASemilla(*semillaIP)
+		
+		// Si es validador, simula quedarse activo reportando uptime
+		if *tipoNodo == "validador" {
+			fmt.Println("⏳ [Modo Validador]: Manteniendo conexión activa para acumular recompensas por Uptime...")
+			for {
+				time.Sleep(10 * time.Minute)
+			}
+		}
 	}
 }
