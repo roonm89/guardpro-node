@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -11,6 +12,8 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +36,8 @@ type Block struct {
 	Transacciones []Transaction `json:"transacciones"`
 	PrevHash      string        `json:"prev_hash"`
 	Hash          string        `json:"hash"`
+	FirmaR        *big.Int      `json:"firma_r"`
+	FirmaS        *big.Int      `json:"firma_s"`
 }
 
 var Blockchain []Block
@@ -51,7 +56,6 @@ func ObtenerSaldo(direccion string) float64 {
 	if direccion == "GP_CREADOR" {
 		saldo = TotalSupply
 	}
-	
 	for _, bloque := range Blockchain {
 		for _, tx := range bloque.Transacciones {
 			if tx.Emisor == direccion {
@@ -121,63 +125,100 @@ func CargarOGenerarBilletera() (*ecdsa.PrivateKey, string, error) {
 }
 
 func main() {
-	fmt.Printf("--- [Fase 4] Inicializando Motor de Transacciones Guard Pro 7 (%s) ---\n\n", Ticker)
-
+	fmt.Printf("=== INTERFAZ INTERACTIVA GUARD PRO 7 (%s) ===\n", Ticker)
 	privateKey, miDireccion, _ := CargarOGenerarBilletera()
-	fmt.Printf("🔑 Tu Billetera Local: %s\n", miDireccion)
+	fmt.Printf("🔑 Billetera Local: %s\n", miDireccion)
 
-	// 1. Inicializar cadena con bloque Génesis vacío
-	genesisBlock := Block{0, time.Now().String(), []Transaction{}, "", ""}
+	// Inicializar Génesis pasándole nil a las firmas del bloque
+	genesisBlock := Block{0, time.Now().String(), []Transaction{}, "", "", nil, nil}
 	genesisBlock.Hash = CalcularDobleHash(genesisBlock)
 	Blockchain = append(Blockchain, genesisBlock)
-	fmt.Println("📦 Bloque Génesis acoplado a la memoria.")
 
-	// 2. Reclamar tus primeras monedas desde el fondo común
-	fmt.Println("\n💸 [Simulación]: Reclamando tus primeras monedas desde el fondo común...")
+	// Simular saldo inicial empaquetado pasándole nil a las firmas del bloque
 	txInicial, _ := CrearTransaccion(privateKey, "GP_CREADOR", miDireccion, 5000.0)
 	Mempool = append(Mempool, txInicial)
-	fmt.Printf("✅ Transacción añadida a la Mempool: Creador -> Tu Dirección (5000.00 %s)\n", Ticker)
-
-	// 3. Forzar el empaquetado del Bloque #1 para asentar tus 5,000 monedas en el libro contable
-	fmt.Println("\n⚒️ [Procesamiento]: Cerrando el Bloque #1 para validar tus fondos...")
-	bloque1 := Block{
-		Index:         len(Blockchain),
-		Timestamp:     time.Now().String(),
-		Transacciones: Mempool,
-		PrevHash:      Blockchain[len(Blockchain)-1].Hash,
-	}
+	bloque1 := Block{1, time.Now().String(), Mempool, genesisBlock.Hash, "", nil, nil}
 	bloque1.Hash = CalcularDobleHash(bloque1)
 	Blockchain = append(Blockchain, bloque1)
-	Mempool = []Transaction{} // Limpiar mempool
-	fmt.Printf("🔒 Bloque #1 asegurado en la cadena. Saldo asentado: %.2f %s\n", ObtenerSaldo(miDireccion), Ticker)
-
-	// 4. Ahora que tu saldo real es de 5,000, el motor te autorizará este envío perfectamente
-	billeteraAmigo := "GP8f3e2b9a1c4d5e6f7g8h9i0j1k2l3m4n"
-	fmt.Printf("\n📤 [Transacción]: Enviando monedas desde tu nodo hacia un nodo auxiliar (%s)...\n", billeteraAmigo)
-	txEnvio, err := CrearTransaccion(privateKey, miDireccion, billeteraAmigo, 1250.50)
-	if err != nil {
-		fmt.Println("❌ Error:", err)
-		return
-	}
-	Mempool = append(Mempool, txEnvio)
-	fmt.Println("✅ Envío firmado criptográficamente y colocado en la Mempool.")
-
-	// 5. Meter el envío de tu amigo en el Bloque #2
-	fmt.Println("\n⚒️ [Procesamiento]: Empaquetando la transferencia en el Bloque #2...")
-	bloque2 := Block{
-		Index:         len(Blockchain),
-		Timestamp:     time.Now().String(),
-		Transacciones: Mempool,
-		PrevHash:      Blockchain[len(Blockchain)-1].Hash,
-	}
-	bloque2.Hash = CalcularDobleHash(bloque2)
-	Blockchain = append(Blockchain, bloque2)
 	Mempool = []Transaction{}
 
-	fmt.Printf("🔒 Bloque #2 creado de forma exitosa. Hash: %s\n", bloque2.Hash)
+	fmt.Println("🚀 Nodo en línea de forma interactiva. Escribe 'ayuda' para ver comandos.")
+	
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("\nguardpro> ")
+		if !scanner.Scan() {
+			break
+		}
+		entrada := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		partes := strings.Fields(entrada)
 
-	// 6. Verificar los saldos contables finales de tu ecosistema financiero
-	fmt.Println("\n📊 [Libro de Contabilidad General - Saldos Finales]")
-	fmt.Printf("▪️ Saldo definitivo de tu Billetera: %.2f %s\n", ObtenerSaldo(miDireccion), Ticker)
-	fmt.Printf("▪️ Saldo definitivo de tu Amigo: %.2f %s\n", ObtenerSaldo(billeteraAmigo), Ticker)
+		if len(partes) == 0 {
+			continue
+		}
+
+		switch partes[0] {
+		case "ayuda":
+			fmt.Println("📜 Comandos Disponibles:")
+			fmt.Println("  saldo       - Muestra las monedas de tu billetera local")
+			fmt.Println("  cadena      - Despliega todo el historial de bloques en JSON")
+			fmt.Println("  enviar      - Realiza una transferencia. Uso: enviar [dirección] [monto]")
+			fmt.Println("  mempool     - Muestra transacciones en sala de espera")
+			fmt.Println("  minar       - Empaqueta la mempool actual en un nuevo bloque")
+			fmt.Println("  salir       - Apaga el nodo de forma segura")
+		case "saldo":
+			fmt.Printf("💰 Saldo Actual: %.2f %s\n", ObtenerSaldo(miDireccion), Ticker)
+		case "cadena":
+			cadenaJSON, _ := json.MarshalIndent(Blockchain, "", "  ")
+			fmt.Println(string(cadenaJSON))
+		case "mempool":
+			if len(Mempool) == 0 {
+				fmt.Println("📭 La Mempool está vacía. No hay transacciones pendientes.")
+			} else {
+				mempoolJSON, _ := json.MarshalIndent(Mempool, "", "  ")
+				fmt.Println(string(mempoolJSON))
+			}
+		case "enviar":
+			if len(partes) < 3 {
+				fmt.Println("❌ Uso incorrecto. Formato: enviar [dirección] [monto]")
+				continue
+			}
+			receptor := partes[1]
+			monto, err := strconv.ParseFloat(partes[2], 64)
+			if err != nil || monto <= 0 {
+				fmt.Println("❌ Monto inválido.")
+				continue
+			}
+			tx, err := CrearTransaccion(privateKey, miDireccion, receptor, monto)
+			if err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			} else {
+				Mempool = append(Mempool, tx)
+				fmt.Printf("✅ Transacción firmada colocada en Mempool (Enviando %.2f a %s)\n", monto, receptor)
+			}
+		case "minar":
+			if len(Mempool) == 0 {
+				fmt.Println("❌ No hay transacciones en la Mempool para empaquetar.")
+				continue
+			}
+			nuevoBloque := Block{
+				Index:         len(Blockchain),
+				Timestamp:     time.Now().String(),
+				Transacciones: Mempool,
+				PrevHash:      Blockchain[len(Blockchain)-1].Hash,
+				Hash:          "",
+				FirmaR:        nil,
+				FirmaS:        nil,
+			}
+			nuevoBloque.Hash = CalcularDobleHash(nuevoBloque)
+			Blockchain = append(Blockchain, nuevoBloque)
+			Mempool = []Transaction{}
+			fmt.Printf("🔒 Bloque #%d Creado Exitosamente. Hash: %s\n", nuevoBloque.Index, nuevoBloque.Hash)
+		case "salir":
+			fmt.Println("👋 Cerrando consola interactiva de GuardPro de forma segura. ¡Descansa!")
+			return
+		default:
+			fmt.Println("❌ Comando no reconocido. Escribe 'ayuda' para ver la lista.")
+		}
+	}
 }
