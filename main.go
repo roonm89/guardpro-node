@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 const TotalSupply = 100000000
 const Ticker = "GuardPro"
 const WalletFile = "guardpro.priv"
+const PuertoRed = ":8080" // Puerto unificado para la red P2P
 
 type Transaction struct {
 	Emisor    string   `json:"emisor"`
@@ -124,17 +126,39 @@ func CargarOGenerarBilletera() (*ecdsa.PrivateKey, string, error) {
 	return privKey, direccionBilletera, nil
 }
 
+// ServidorRed corre en segundo plano y atiende a otros nodos
+func ServidorRed() {
+	escuchador, err := net.Listen("tcp", PuertoRed)
+	if err != nil {
+		fmt.Printf("\n⚠️ [Error Red]: No se pudo abrir el puerto %s: %v\nguardpro> ", PuertoRed, err)
+		return
+	}
+	defer escuchador.Close()
+
+	for {
+		conexion, err := escuchador.Accept()
+		if err != nil {
+			continue
+		}
+		// Atender al par enviándole la blockchain en formato JSON
+		go func(conn net.Conn) {
+			defer conn.Close()
+			json.NewEncoder(conn).Encode(Blockchain)
+		}(conexion)
+	}
+}
+
 func main() {
-	fmt.Printf("=== INTERFAZ INTERACTIVA GUARD PRO 7 (%s) ===\n", Ticker)
+	fmt.Printf("=== NODE P2P INTERACTIVO GUARD PRO 7 (%s) ===\n", Ticker)
 	privateKey, miDireccion, _ := CargarOGenerarBilletera()
 	fmt.Printf("🔑 Billetera Local: %s\n", miDireccion)
 
-	// Inicializar Génesis pasándole nil a las firmas del bloque
+	// Inicializar Génesis
 	genesisBlock := Block{0, time.Now().String(), []Transaction{}, "", "", nil, nil}
 	genesisBlock.Hash = CalcularDobleHash(genesisBlock)
 	Blockchain = append(Blockchain, genesisBlock)
 
-	// Simular saldo inicial empaquetado pasándole nil a las firmas del bloque
+	// Asignar saldo inicial
 	txInicial, _ := CrearTransaccion(privateKey, "GP_CREADOR", miDireccion, 5000.0)
 	Mempool = append(Mempool, txInicial)
 	bloque1 := Block{1, time.Now().String(), Mempool, genesisBlock.Hash, "", nil, nil}
@@ -142,7 +166,10 @@ func main() {
 	Blockchain = append(Blockchain, bloque1)
 	Mempool = []Transaction{}
 
-	fmt.Println("🚀 Nodo en línea de forma interactiva. Escribe 'ayuda' para ver comandos.")
+	// 🚀 AQUÍ ESTÁ LA MAGIA CONCURRENTE: Lanzar el servidor de red en paralelo
+	go ServidorRed()
+	fmt.Printf("🌐 [Servidor Activo]: Canal P2P abierto silenciosamente en el puerto %s\n", PuertoRed)
+	fmt.Println("💡 Escribe 'ayuda' para ver la lista de comandos disponibles.")
 	
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -194,7 +221,7 @@ func main() {
 				fmt.Printf("❌ Error: %v\n", err)
 			} else {
 				Mempool = append(Mempool, tx)
-				fmt.Printf("✅ Transacción firmada colocada en Mempool (Enviando %.2f a %s)\n", monto, receptor)
+				fmt.Printf("✅ Transacción colocada en Mempool (Enviando %.2f a %s)\n", monto, receptor)
 			}
 		case "minar":
 			if len(Mempool) == 0 {
@@ -215,7 +242,7 @@ func main() {
 			Mempool = []Transaction{}
 			fmt.Printf("🔒 Bloque #%d Creado Exitosamente. Hash: %s\n", nuevoBloque.Index, nuevoBloque.Hash)
 		case "salir":
-			fmt.Println("👋 Cerrando consola interactiva de GuardPro de forma segura. ¡Descansa!")
+			fmt.Println("👋 Cerrando nodo y apagando canales de red. ¡Hasta pronto!")
 			return
 		default:
 			fmt.Println("❌ Comando no reconocido. Escribe 'ayuda' para ver la lista.")
