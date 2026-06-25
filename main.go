@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"math/big"
 	"net"
@@ -145,20 +146,49 @@ func ServidorRed() {
 	}
 }
 
-// RelojUptime emite recompensas automaticas en segundo plano cada 10 segundos
-func RelojUptime(privKey *ecdsa.PrivateKey, destino string) {
-	cronometro := time.NewTicker(10 * time.Second)
+func ConectarASemilla(target string) {
+	conn, err := net.Dial("tcp", target)
+	if err != nil {
+		fmt.Printf("\n❌ Error de conexión al servidor semilla en %s: %v\n", target, err)
+		return
+	}
+	defer conn.Close()
+	fmt.Println("\n🔗 [Conexión P2P]: Enlazado con éxito al Nodo Semilla en Azure.")
+
+	var cadenaRecibida []Block
+	err = json.NewDecoder(conn).Decode(&cadenaRecibida)
+	if err != nil {
+		fmt.Println("Error leyendo la cadena:", err)
+		return
+	}
+	Blockchain = cadenaRecibida
+	fmt.Printf("📦 [Sincronización]: Cadena descargada. Bloques actuales en red: %d\n", len(Blockchain))
+}
+
+func RelojUptime(privKey *ecdsa.PrivateKey, destino string, modo string) {
+	intervalo := 5 * time.Minute
+	if modo == "validador" {
+		intervalo = 10 * time.Second
+	}
+	
+	cronometro := time.NewTicker(intervalo)
 	for range cronometro.C {
-		// Crear transaccion de emision primaria (recompensa por estar activo)
 		txRecompensa, _ := CrearTransaccion(privKey, "GP_CREADOR", destino, 10.0)
-		
-		// Forzar el empaquetado del bloque inmediatamente
 		MempoolTransitoria := []Transaction{txRecompensa}
+		
+		// ESCUDO DE SEGURIDAD: Validar que existan bloques antes de pedir el PrevHash
+		var prevHash string
+		if len(Blockchain) > 0 {
+			prevHash = Blockchain[len(Blockchain)-1].Hash
+		} else {
+			prevHash = ""
+		}
+
 		nuevoBloque := Block{
 			Index:         len(Blockchain),
 			Timestamp:     time.Now().String(),
 			Transacciones: MempoolTransitoria,
-			PrevHash:      Blockchain[len(Blockchain)-1].Hash,
+			PrevHash:      prevHash,
 			Hash:          "",
 			FirmaR:        nil,
 			FirmaS:        nil,
@@ -166,34 +196,42 @@ func RelojUptime(privKey *ecdsa.PrivateKey, destino string) {
 		nuevoBloque.Hash = CalcularDobleHash(nuevoBloque)
 		Blockchain = append(Blockchain, nuevoBloque)
 		
-		// Imprimir aviso discreto interrumpiendo elegantemente la consola
 		fmt.Printf("\n🪙 [RECOMPENSA]: +10.00 %s acreditados por Uptime. Bloque #%d minado.\nguardpro> ", Ticker, nuevoBloque.Index)
 	}
 }
 
 func main() {
-	fmt.Printf("=== SISTEMA DE EMISIÓN INTERACTIVA (%s) ===\n", Ticker)
+	tipoNodo := flag.String("tipo", "semilla", "Tipo de nodo (semilla o validador)")
+	semillaIP := flag.String("semilla", "20.226.10.105:8080", "Dirección IP del nodo semilla")
+	flag.Parse()
+
+	fmt.Printf("=== SISTEMA HÍBRIDO GUARD PRO 7 (%s) ===\n", Ticker)
+	fmt.Printf("🎯 Modo de ejecución: [%s]\n", *tipoNodo)
+	
 	privateKey, miDireccion, _ := CargarOGenerarBilletera()
 	fmt.Printf("🔑 Billetera Local: %s\n", miDireccion)
 
-	// Inicializar Génesis
-	genesisBlock := Block{0, time.Now().String(), []Transaction{}, "", "", nil, nil}
-	genesisBlock.Hash = CalcularDobleHash(genesisBlock)
-	Blockchain = append(Blockchain, genesisBlock)
+	if *tipoNodo == "semilla" {
+		genesisBlock := Block{0, time.Now().String(), []Transaction{}, "", "", nil, nil}
+		genesisBlock.Hash = CalcularDobleHash(genesisBlock)
+		Blockchain = append(Blockchain, genesisBlock)
 
-	// Asignar fondo inicial estático de 5000 monedas
-	txInicial, _ := CrearTransaccion(privateKey, "GP_CREADOR", miDireccion, 5000.0)
-	Mempool = append(Mempool, txInicial)
-	bloque1 := Block{1, time.Now().String(), Mempool, genesisBlock.Hash, "", nil, nil}
-	bloque1.Hash = CalcularDobleHash(bloque1)
-	Blockchain = append(Blockchain, bloque1)
-	Mempool = []Transaction{}
+		txInicial, _ := CrearTransaccion(privateKey, "GP_CREADOR", miDireccion, 5000.0)
+		Mempool = append(Mempool, txInicial)
+		bloque1 := Block{1, time.Now().String(), Mempool, genesisBlock.Hash, "", nil, nil}
+		bloque1.Hash = CalcularDobleHash(bloque1)
+		Blockchain = append(Blockchain, bloque1)
+		Mempool = []Transaction{}
 
-	// Lanzar canales concurrentes en paralelo
-	go ServidorRed()
-	go RelojUptime(privateKey, miDireccion) // 🚀 NUEVO: Hilo de tiempo activo
+		go ServidorRed()
+		go RelojUptime(privateKey, miDireccion, *tipoNodo)
+		fmt.Println("🌐 Nodo Semilla escuchando de forma concurrente.")
+	} else {
+		fmt.Printf("🛰️ Contactando al Nodo Semilla en la nube: %s...\n", *semillaIP)
+		ConectarASemilla(*semillaIP)
+		go RelojUptime(privateKey, miDireccion, *tipoNodo)
+	}
 	
-	fmt.Printf("🌐 Servidor P2P activo. Reloj de Uptime configurado (Ciclos de 10s).\n")
 	fmt.Println("💡 Escribe 'ayuda' o consulta tu 'saldo' para verificar los incrementos.")
 	
 	scanner := bufio.NewScanner(os.Stdin)
@@ -213,22 +251,22 @@ func main() {
 		case "ayuda":
 			fmt.Println("📜 Comandos Disponibles:")
 			fmt.Println("  saldo       - Muestra las monedas de tu billetera local")
+			fmt.Println("  suministro  - Muestra el estado de la emisión global de monedas")
 			fmt.Println("  cadena      - Despliega todo el historial de bloques en JSON")
 			fmt.Println("  enviar      - Realiza una transferencia. Uso: enviar [dirección] [monto]")
-			fmt.Println("  mempool     - Muestra transacciones en sala de espera")
 			fmt.Println("  salir       - Apaga el nodo de forma segura")
+		case "suministro":
+			emitidas := TotalSupply - ObtenerSaldo("GP_CREADOR")
+			restantes := ObtenerSaldo("GP_CREADOR")
+			fmt.Printf("📊 ESTADO DEL SUMINISTRO (%s):\n", Ticker)
+			fmt.Printf("  ▪️ Suministro Máximo Protegido: %d.00 %s\n", TotalSupply, Ticker)
+			fmt.Printf("  ▪️ Monedas Emitidas por Uptime: %.2f %s\n", emitidas, Ticker)
+			fmt.Printf("  ▪️ Fondo Común Restante:       %.2f %s\n", restantes, Ticker)
 		case "saldo":
 			fmt.Printf("💰 Saldo Actual: %.2f %s\n", ObtenerSaldo(miDireccion), Ticker)
 		case "cadena":
 			cadenaJSON, _ := json.MarshalIndent(Blockchain, "", "  ")
 			fmt.Println(string(cadenaJSON))
-		case "mempool":
-			if len(Mempool) == 0 {
-				fmt.Println("📭 La Mempool está vacía. No hay transacciones pendientes.")
-			} else {
-				mempoolJSON, _ := json.MarshalIndent(Mempool, "", "  ")
-				fmt.Println(string(mempoolJSON))
-			}
 		case "enviar":
 			if len(partes) < 3 {
 				fmt.Println("❌ Uso incorrecto. Formato: enviar [dirección] [monto]")
@@ -248,7 +286,7 @@ func main() {
 				fmt.Printf("✅ Transacción colocada en Mempool (Enviando %.2f a %s)\n", monto, receptor)
 			}
 		case "salir":
-			fmt.Println("👋 Guardando estado de red y cerrando el nodo. ¡Buen descanso!")
+			fmt.Println("👋 Cerrando el nodo. ¡Buen descanso!")
 			return
 		default:
 			fmt.Println("❌ Comando no reconocido.")
