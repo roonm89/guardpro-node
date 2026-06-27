@@ -22,6 +22,7 @@ import (
 const TotalSupply = 100000000
 const Ticker = "GuardPro"
 const WalletFile = "guardpro.priv"
+const DBFile = "blockchain.json" // 💾 Archivo físico de base de datos
 const PuertoRed = ":8080"
 
 type Transaction struct {
@@ -52,6 +53,28 @@ func CalcularDobleHash(b Block) string {
 	pHash := sha256.Sum256([]byte(record))
 	dHash := sha256.Sum256(pHash[:])
 	return hex.EncodeToString(dHash[:])
+}
+
+// 💾 Guarda el estado actual de la blockchain en el disco duro
+func GuardarCadenaEnDisco() {
+	bytesData, err := json.MarshalIndent(Blockchain, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(DBFile, bytesData, 0644)
+}
+
+// 💾 Lee el disco duro al encender para recuperar los saldos históricos
+func CargarCadenaDesdeDisco() bool {
+	if _, err := os.Stat(DBFile); os.IsNotExist(err) {
+		return false
+	}
+	bytesData, err := os.ReadFile(DBFile)
+	if err != nil {
+		return false
+	}
+	err = json.Unmarshal(bytesData, &Blockchain)
+	return err == nil
 }
 
 func ObtenerSaldo(direccion string) float64 {
@@ -162,6 +185,7 @@ func ConectarASemilla(target string) {
 		return
 	}
 	Blockchain = cadenaRecibida
+	GuardarCadenaEnDisco() // 💾 Guardar la cadena fresca descargada
 	fmt.Printf("📦 [Sincronización]: Cadena descargada. Bloques actuales en red: %d\n", len(Blockchain))
 }
 
@@ -176,7 +200,6 @@ func RelojUptime(privKey *ecdsa.PrivateKey, destino string, modo string) {
 		txRecompensa, _ := CrearTransaccion(privKey, "GP_CREADOR", destino, 10.0)
 		MempoolTransitoria := []Transaction{txRecompensa}
 		
-		// ESCUDO DE SEGURIDAD: Validar que existan bloques antes de pedir el PrevHash
 		var prevHash string
 		if len(Blockchain) > 0 {
 			prevHash = Blockchain[len(Blockchain)-1].Hash
@@ -195,6 +218,7 @@ func RelojUptime(privKey *ecdsa.PrivateKey, destino string, modo string) {
 		}
 		nuevoBloque.Hash = CalcularDobleHash(nuevoBloque)
 		Blockchain = append(Blockchain, nuevoBloque)
+		GuardarCadenaEnDisco() // 💾 Guardar el nuevo bloque en el disco duro inmediatamente
 		
 		fmt.Printf("\n🪙 [RECOMPENSA]: +10.00 %s acreditados por Uptime. Bloque #%d minado.\nguardpro> ", Ticker, nuevoBloque.Index)
 	}
@@ -205,24 +229,33 @@ func main() {
 	semillaIP := flag.String("semilla", "20.226.10.105:8080", "Dirección IP del nodo semilla")
 	flag.Parse()
 
-	fmt.Printf("=== SISTEMA HÍBRIDO GUARD PRO 7 (%s) ===\n", Ticker)
+	fmt.Printf("=== SISTEMA CON PERSISTENCIA GUARD PRO 7 (%s) ===\n", Ticker)
 	fmt.Printf("🎯 Modo de ejecución: [%s]\n", *tipoNodo)
 	
 	privateKey, miDireccion, _ := CargarOGenerarBilletera()
 	fmt.Printf("🔑 Billetera Local: %s\n", miDireccion)
 
+	// 💾 INTENTAR CARGAR LA CADENA DESDE EL DISCO DURO ANTES DE EMPEZAR
+	if CargarCadenaDesdeDisco() {
+		fmt.Printf("📂 Base de datos localizada. Libro contable restaurado con %d bloques de historial.\n", len(Blockchain))
+	} else {
+		fmt.Println("📦 No se encontró historial en disco. Inicializando cadena limpia...")
+		if *tipoNodo == "semilla" {
+			genesisBlock := Block{0, time.Now().String(), []Transaction{}, "", "", nil, nil}
+			genesisBlock.Hash = CalcularDobleHash(genesisBlock)
+			Blockchain = append(Blockchain, genesisBlock)
+
+			txInicial, _ := CrearTransaccion(privateKey, "GP_CREADOR", miDireccion, 5000.0)
+			Mempool = append(Mempool, txInicial)
+			bloque1 := Block{1, time.Now().String(), Mempool, genesisBlock.Hash, "", nil, nil}
+			bloque1.Hash = CalcularDobleHash(bloque1)
+			Blockchain = append(Blockchain, bloque1)
+			Mempool = []Transaction{}
+			GuardarCadenaEnDisco() // Salvar bloque inicial
+		}
+	}
+
 	if *tipoNodo == "semilla" {
-		genesisBlock := Block{0, time.Now().String(), []Transaction{}, "", "", nil, nil}
-		genesisBlock.Hash = CalcularDobleHash(genesisBlock)
-		Blockchain = append(Blockchain, genesisBlock)
-
-		txInicial, _ := CrearTransaccion(privateKey, "GP_CREADOR", miDireccion, 5000.0)
-		Mempool = append(Mempool, txInicial)
-		bloque1 := Block{1, time.Now().String(), Mempool, genesisBlock.Hash, "", nil, nil}
-		bloque1.Hash = CalcularDobleHash(bloque1)
-		Blockchain = append(Blockchain, bloque1)
-		Mempool = []Transaction{}
-
 		go ServidorRed()
 		go RelojUptime(privateKey, miDireccion, *tipoNodo)
 		fmt.Println("🌐 Nodo Semilla escuchando de forma concurrente.")
@@ -286,7 +319,7 @@ func main() {
 				fmt.Printf("✅ Transacción colocada en Mempool (Enviando %.2f a %s)\n", monto, receptor)
 			}
 		case "salir":
-			fmt.Println("👋 Cerrando el nodo. ¡Buen descanso!")
+			fmt.Println("👋 Cerrando el nodo y salvaguardando la base de datos. ¡Buen descanso!")
 			return
 		default:
 			fmt.Println("❌ Comando no reconocido.")
