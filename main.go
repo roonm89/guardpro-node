@@ -22,7 +22,7 @@ import (
 const TotalSupply = 100000000
 const Ticker = "GuardPro"
 const WalletFile = "guardpro.priv"
-const DBFile = "blockchain.json" // 💾 Archivo físico de base de datos
+const DBFile = "blockchain.json"
 const PuertoRed = ":8080"
 
 type Transaction struct {
@@ -55,7 +55,6 @@ func CalcularDobleHash(b Block) string {
 	return hex.EncodeToString(dHash[:])
 }
 
-// 💾 Guarda el estado actual de la blockchain en el disco duro
 func GuardarCadenaEnDisco() {
 	bytesData, err := json.MarshalIndent(Blockchain, "", "  ")
 	if err != nil {
@@ -64,7 +63,6 @@ func GuardarCadenaEnDisco() {
 	_ = os.WriteFile(DBFile, bytesData, 0644)
 }
 
-// 💾 Lee el disco duro al encender para recuperar los saldos históricos
 func CargarCadenaDesdeDisco() bool {
 	if _, err := os.Stat(DBFile); os.IsNotExist(err) {
 		return false
@@ -121,6 +119,17 @@ func CrearTransaccion(privKey *ecdsa.PrivateKey, emisor string, receptor string,
 	return tx, nil
 }
 
+func PropagarTransaccion(tx Transaction, target string) {
+	conn, err := net.Dial("tcp", target)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	_, _ = conn.Write([]byte("TX:"))
+	_ = json.NewEncoder(conn).Encode(tx)
+}
+
 func CargarOGenerarBilletera() (*ecdsa.PrivateKey, string, error) {
 	if _, err := os.Stat(WalletFile); err == nil {
 		bytesPrivados, err := os.ReadFile(WalletFile)
@@ -164,7 +173,19 @@ func ServidorRed() {
 		}
 		go func(conn net.Conn) {
 			defer conn.Close()
-			json.NewEncoder(conn).Encode(Blockchain)
+
+			prefijo := make([]byte, 3)
+			n, err := conn.Read(prefijo)
+			if err == nil && string(prefijo[:n]) == "TX:" {
+				var txRecibida Transaction
+				if err := json.NewDecoder(conn).Decode(&txRecibida); err == nil {
+					Mempool = append(Mempool, txRecibida)
+					fmt.Printf("\n📥 [MEMPOOL GLOBAL]: Nueva transacción recibida por red de %s por %.2f %s\nguardpro> ", txRecibida.Emisor[:10], txRecibida.Monto, Ticker)
+				}
+				return
+			}
+
+			_ = json.NewEncoder(conn).Encode(Blockchain)
 		}(conexion)
 	}
 }
@@ -176,29 +197,28 @@ func ConectarASemilla(target string) {
 		return
 	}
 	defer conn.Close()
-	fmt.Println("\n🔗 [Conexión P2P]: Enlazado con éxito al Nodo Semilla en Azure.")
 
 	var cadenaRecibida []Block
 	err = json.NewDecoder(conn).Decode(&cadenaRecibida)
 	if err != nil {
-		fmt.Println("Error leyendo la cadena:", err)
 		return
 	}
 	Blockchain = cadenaRecibida
-	GuardarCadenaEnDisco() // 💾 Guardar la cadena fresca descargada
+	GuardarCadenaEnDisco()
 	fmt.Printf("📦 [Sincronización]: Cadena descargada. Bloques actuales en red: %d\n", len(Blockchain))
 }
 
 func RelojUptime(privKey *ecdsa.PrivateKey, destino string, modo string) {
+	// ⏱️ RED UNIFICADA: Todos los nodos avanzan al compás macroeconómico oficial de 5 minutos
 	intervalo := 5 * time.Minute
-	if modo == "validador" {
-		intervalo = 10 * time.Second
-	}
 	
 	cronometro := time.NewTicker(intervalo)
 	for range cronometro.C {
+		txsParaBloque := Mempool
+		Mempool = []Transaction{}
+		
 		txRecompensa, _ := CrearTransaccion(privKey, "GP_CREADOR", destino, 10.0)
-		MempoolTransitoria := []Transaction{txRecompensa}
+		txsParaBloque = append(txsParaBloque, txRecompensa)
 		
 		var prevHash string
 		if len(Blockchain) > 0 {
@@ -210,7 +230,7 @@ func RelojUptime(privKey *ecdsa.PrivateKey, destino string, modo string) {
 		nuevoBloque := Block{
 			Index:         len(Blockchain),
 			Timestamp:     time.Now().String(),
-			Transacciones: MempoolTransitoria,
+			Transacciones: txsParaBloque,
 			PrevHash:      prevHash,
 			Hash:          "",
 			FirmaR:        nil,
@@ -218,7 +238,7 @@ func RelojUptime(privKey *ecdsa.PrivateKey, destino string, modo string) {
 		}
 		nuevoBloque.Hash = CalcularDobleHash(nuevoBloque)
 		Blockchain = append(Blockchain, nuevoBloque)
-		GuardarCadenaEnDisco() // 💾 Guardar el nuevo bloque en el disco duro inmediatamente
+		GuardarCadenaEnDisco()
 		
 		fmt.Printf("\n🪙 [RECOMPENSA]: +10.00 %s acreditados por Uptime. Bloque #%d minado.\nguardpro> ", Ticker, nuevoBloque.Index)
 	}
@@ -229,15 +249,14 @@ func main() {
 	semillaIP := flag.String("semilla", "20.226.10.105:8080", "Dirección IP del nodo semilla")
 	flag.Parse()
 
-	fmt.Printf("=== SISTEMA CON PERSISTENCIA GUARD PRO 7 (%s) ===\n", Ticker)
+	fmt.Printf("=== CORE OFICIAL UNIFICADO GUARD PRO 7 (%s) ===\n", Ticker)
 	fmt.Printf("🎯 Modo de ejecución: [%s]\n", *tipoNodo)
 	
 	privateKey, miDireccion, _ := CargarOGenerarBilletera()
 	fmt.Printf("🔑 Billetera Local: %s\n", miDireccion)
 
-	// 💾 INTENTAR CARGAR LA CADENA DESDE EL DISCO DURO ANTES DE EMPEZAR
 	if CargarCadenaDesdeDisco() {
-		fmt.Printf("📂 Base de datos localizada. Libro contable restaurado con %d bloques de historial.\n", len(Blockchain))
+		fmt.Printf("📂 Base de datos localizada. Libro contable restaurado con %d bloques.\n", len(Blockchain))
 	} else {
 		fmt.Println("📦 No se encontró historial en disco. Inicializando cadena limpia...")
 		if *tipoNodo == "semilla" {
@@ -251,14 +270,15 @@ func main() {
 			bloque1.Hash = CalcularDobleHash(bloque1)
 			Blockchain = append(Blockchain, bloque1)
 			Mempool = []Transaction{}
-			GuardarCadenaEnDisco() // Salvar bloque inicial
+			GuardarCadenaEnDisco()
 		}
 	}
 
+	go ServidorRed()
+
 	if *tipoNodo == "semilla" {
-		go ServidorRed()
 		go RelojUptime(privateKey, miDireccion, *tipoNodo)
-		fmt.Println("🌐 Nodo Semilla escuchando de forma concurrente.")
+		fmt.Println("🌐 Nodo Semilla escuchando transacciones y pares de forma concurrente.")
 	} else {
 		fmt.Printf("🛰️ Contactando al Nodo Semilla en la nube: %s...\n", *semillaIP)
 		ConectarASemilla(*semillaIP)
@@ -287,7 +307,11 @@ func main() {
 			fmt.Println("  suministro  - Muestra el estado de la emisión global de monedas")
 			fmt.Println("  cadena      - Despliega todo el historial de bloques en JSON")
 			fmt.Println("  enviar      - Realiza una transferencia. Uso: enviar [dirección] [monto]")
+			fmt.Println("  mempool     - Muestra las transacciones en sala de espera")
 			fmt.Println("  salir       - Apaga el nodo de forma segura")
+		case "mempool":
+			mempoolJSON, _ := json.MarshalIndent(Mempool, "", "  ")
+			fmt.Println(string(mempoolJSON))
 		case "suministro":
 			emitidas := TotalSupply - ObtenerSaldo("GP_CREADOR")
 			restantes := ObtenerSaldo("GP_CREADOR")
@@ -313,16 +337,3 @@ func main() {
 			}
 			tx, err := CrearTransaccion(privateKey, miDireccion, receptor, monto)
 			if err != nil {
-				fmt.Printf("❌ Error: %v\n", err)
-			} else {
-				Mempool = append(Mempool, tx)
-				fmt.Printf("✅ Transacción colocada en Mempool (Enviando %.2f a %s)\n", monto, receptor)
-			}
-		case "salir":
-			fmt.Println("👋 Cerrando el nodo y salvaguardando la base de datos. ¡Buen descanso!")
-			return
-		default:
-			fmt.Println("❌ Comando no reconocido.")
-		}
-	}
-}
